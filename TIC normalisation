@@ -31,3 +31,5 @@ normalized_data <- data.table(
 fwrite(normalized_data, output_path, row.names = FALSE)
 
 cat("Normalized data saved to:", output_path)
+
+# Reference https://rdrr.io/bioc/pmp/src/R/normalisation.R
