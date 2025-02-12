@@ -1,27 +1,33 @@
-# Load necessary library
-library(data.table)
+# Load necessary libraries
+library(data.table)  # Faster CSV reading and writing
 
 # Define file paths
-data_path <- "/Users/unek/Desktop/ecm_gin_ha_total_for_pqn.csv"  # Input file
-output_path <- "/Users/unek/Desktop/normalized_tic.csv"  # Output file
+data_path <- "/Users/unek/Desktop/ecm_gin_ha_total_for_pqn.csv"
+output_path <- "/Users/unek/Desktop/normalized_sum_total.csv"
 
-# Load dataset
+# Load the dataset
 data <- fread(data_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
 
-# Extract sample labels
-sample_labels <- data[[1]]  # Assume first column contains sample labels
-features <- data[, -1, with = FALSE]  # Exclude sample labels
+# Extract sample labels (first column)
+sample_labels <- data[[1]]
 
-# Compute Total Ion Count (TIC) for each sample
-tic_values <- rowSums(features, na.rm = TRUE)
+# Convert to matrix for easier manipulation, excluding the sample labels column
+features <- as.matrix(data[, -1, with = FALSE])
 
-# Normalize each sample by its TIC
-normalized_features <- features / tic_values
+# Calculate column sums (sum for each sample)
+col_sums <- colSums(features, na.rm = TRUE)
 
-# Add sample labels back
-normalized_data <- cbind(Sample = sample_labels, normalized_features)
+# Normalize each sample (column) by its own sum
+# This uses matrix broadcasting to divide each column by its sum
+normalized_features <- sweep(features, 2, col_sums, FUN = "/")
+
+# Convert back to data.table and add sample labels
+normalized_data <- data.table(
+  Sample = sample_labels,
+  as.data.table(normalized_features)
+)
 
 # Save the normalized data
 fwrite(normalized_data, output_path, row.names = FALSE)
 
-cat("TIC normalization completed and saved to:", output_path)
+cat("Normalized data saved to:", output_path)
