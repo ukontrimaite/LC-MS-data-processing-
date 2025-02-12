@@ -1,23 +1,37 @@
-# Load necessary libraries
-library(data.table)  # Faster CSV reading and writing
+# Load necessary library
+library(data.table)
 
 # Define file paths
 data_path <- "/Users/unek/Desktop/ecm_gin_ha_total_for_pqn.csv"
 output_path <- "/Users/unek/Desktop/normalized_pqn.csv"
 
-# Load the dataset correctly
+# Load the dataset
 data <- fread(data_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
 
-# Identify QC samples (modify "QC" to match your actual QC sample label)
-qc_samples <- data[data[[1]] == "QC", -1, with = FALSE]  # First column assumed as sample labels
+# Ensure the dataset is properly loaded
+if (nrow(data) == 0 || ncol(data) < 2) {
+  stop("Error: Dataset appears to be empty or incorrectly formatted.")
+}
+
+# Extract feature names (first column)
+feature_names <- data[[1]]
+
+# Convert features into a matrix (features as rows, samples as columns)
+features <- as.matrix(data[, -1, with = FALSE])
+
+# Ensure feature matrix is numeric
+features <- apply(features, 2, as.numeric)
+
+# Identify QC samples (modify "QC" to match actual QC sample label)
+qc_samples <- features[, grepl("QC", colnames(features)), drop = FALSE]  
 
 # Ensure QC samples exist
-if (nrow(qc_samples) == 0) {
+if (ncol(qc_samples) == 0) {
   stop("No QC samples found. Check your dataset for correct QC labeling.")
 }
 
-# Calculate mean QC spectrum (reference for PQN normalization)
-mean_qc_spectrum <- colMeans(qc_samples, na.rm = TRUE)
+# Compute mean QC spectrum (reference for PQN normalization)
+mean_qc_spectrum <- rowMeans(qc_samples, na.rm = TRUE)
 
 # Define PQN normalization function
 pqn_normalization <- function(sample, ref_spectrum) {
@@ -27,14 +41,17 @@ pqn_normalization <- function(sample, ref_spectrum) {
   return(normalized_sample)
 }
 
-# Apply PQN normalization to all non-label columns
-normalized_features <- t(apply(data[, -1, with = FALSE], 1, pqn_normalization, ref_spectrum = mean_qc_spectrum))
+# Apply PQN normalization to all samples (columns)
+normalized_features <- apply(features, 2, pqn_normalization, ref_spectrum = mean_qc_spectrum)
 
-# Add back sample labels
-normalized_data <- cbind(Sample = data[[1]], normalized_features)
+# Convert back to data.table and add feature names
+normalized_data <- data.table(
+  Feature = feature_names,  # Add back feature names
+  as.data.table(normalized_features)  # Convert back to data.table
+)
 
-# Save normalized data
+# Save the normalized data
 fwrite(normalized_data, output_path, row.names = FALSE)
 
-cat("Pooled PQN normalization using QC mean completed and saved to:", output_path)
+cat("PQN normalization completed and saved to:", output_path)
 
