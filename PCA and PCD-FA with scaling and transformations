@@ -1,0 +1,111 @@
+install.packages("pracma")  # If not installed
+library(pracma)
+library(ggplot2)
+
+# Define file paths
+data_path <- "/Users/unek/Desktop/2class_ecm.csv"
+pca_output_path <- "/Users/unek/Desktop/pca_results.csv"
+dfa_output_path <- "/Users/unek/Desktop/dfa_results.csv"
+pca_plot_path <- "/Users/unek/Desktop/pca_plot.png"
+dfa_plot_path <- "/Users/unek/Desktop/dfa_plot.png"
+
+# Load the dataset correctly
+data <- read.csv(data_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+
+# Separate labels and features
+label <- as.factor(data[, 1])  # First column is the class label
+features <- data.matrix(data[, -1])  # Convert features to a numeric matrix
+
+#Perform transformation (please select appropriate according to normal distribution results or delete if not required)
+features <- log10(features + 1)  # Log transformation
+features <- sqrt(features) # Square root transformation
+features <- scale(features, center = TRUE, scale = TRUE)  # Autoscaling
+features <- scale(features, center = TRUE, scale = sqrt(apply(features, 2, sd))) # Pareto scaling
+features <- scale(features, center = TRUE, scale = FALSE) # Mean centering only 
+
+# Perform PCA
+pca_results <- prcomp(features, center = FALSE, scale. = FALSE)
+
+# Calculate variance explained by each PC
+pca_variance <- pca_results$sdev^2
+pca_variance_ratio <- (pca_variance / sum(pca_variance)) * 100
+print(pca_variance_ratio)
+
+# Extract PCA scores
+pca_scores <- data.frame(PC1 = pca_results$x[, 1], PC2 = pca_results$x[, 2], Class = label)
+
+# Save PCA results
+write.csv(pca_results$x, pca_output_path, row.names = TRUE)
+
+# Plot PCA results
+p <- ggplot(pca_scores, aes(x = PC1, y = PC2, color = Class)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(title = "PCA Plot of Metabolomic Data",
+       x = paste("Principal Component 1 (PC1) -", pca_variance_ratio[1], "% Variance"),
+       y = paste("Principal Component 2 (PC2) -", pca_variance_ratio[2], "% Variance"))
+print(p)
+ggsave(pca_plot_path, plot = p, width = 8, height = 6)
+
+# Save PCA scores plot
+write.csv(pca_scores, "/Users/unek/Desktop/pca_scores.csv", row.names = TRUE)
+
+# Define groups to include in DFA
+selected_groups <- c("GIN28_ECM_10", "GIN28_ECM_30")  # Change these as needed
+
+# Filter data to include only selected groups
+filtered_data <- data[data[, 1] %in% selected_groups, ]
+filtered_label <- as.factor(filtered_data[, 1])  # Extract class labels
+filtered_features <- data.matrix(filtered_data[, -1])  # Extract features
+
+# Define the DFA function
+pcdfa <- function(x, label, no_pc = 10, maxfac = NULL) {
+  unique_label <- unique(label)
+  no_class <- length(unique_label)
+  if (no_class < 2) stop("Number of classes must be > 1")
+  if (is.null(maxfac) || maxfac > no_class - 1) {
+    maxfac <- no_class - 1
+  }
+  
+  xmean <- colMeans(x)
+  pca_results <- prcomp(x)
+  x <- pca_results$x[, 1:no_pc]
+  pc_loadings <- pca_results$rotation[, 1:no_pc]
+  
+  mx <- colMeans(x)
+  Tt <- matrix(0, ncol(x), ncol(x))
+  W <- matrix(0, ncol(x), ncol(x))
+  
+  for (i in unique_label) {
+    K <- x[label == i, ]
+    ns <- nrow(K)
+    zz <- if (ns > 1) colMeans(K) else K
+    A <- K - matrix(mx, nrow = ns, ncol = ncol(K), byrow = TRUE)
+    C <- K - matrix(zz, nrow = ns, ncol = ncol(K), byrow = TRUE)
+    Tt <- Tt + t(A) %*% A
+    W <- W + t(C) %*% C
+  }
+  
+  B <- Tt - W
+  invW <- solve(W)
+  P <- invW %*% B
+  P_eigen <- eigen(P)
+  V <- Re(P_eigen$vectors[, 1:maxfac])
+  U <- x %*% V
+  loadings <- pc_loadings %*% V
+  
+  return(list(scores = U, loadings = loadings, eigenvalues = P_eigen$values, xmean = xmean))
+}
+
+# Perform DFA only on selected groups
+dfa_results <- pcdfa(filtered_features, label = filtered_label, no_pc = 10, maxfac = NULL)
+
+# Save DFA results
+write.csv(dfa_results$scores, dfa_output_path, row.names = TRUE)
+
+# Save DFA results
+write.csv(dfa_results$scores, dfa_output_path, row.names = TRUE)
+write.csv(dfa_results$loadings, "/Users/unek/Desktop/dfa_loadings.csv", row.names = TRUE)  # Added line
+
+cat("PCA and DFA results for selected groups saved successfully.")
+
