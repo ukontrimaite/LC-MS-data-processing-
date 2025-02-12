@@ -1,0 +1,40 @@
+# Load necessary libraries
+library(data.table)  # Faster CSV reading and writing
+
+# Define file paths
+data_path <- "/Users/unek/Desktop/ecm_gin_ha_total_for_pqn.csv"
+output_path <- "/Users/unek/Desktop/normalized_pqn.csv"
+
+# Load the dataset correctly
+data <- fread(data_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+
+# Identify QC samples (modify "QC" to match your actual QC sample label)
+qc_samples <- data[data[[1]] == "QC", -1, with = FALSE]  # First column assumed as sample labels
+
+# Ensure QC samples exist
+if (nrow(qc_samples) == 0) {
+  stop("No QC samples found. Check your dataset for correct QC labeling.")
+}
+
+# Calculate mean QC spectrum (reference for PQN normalization)
+mean_qc_spectrum <- colMeans(qc_samples, na.rm = TRUE)
+
+# Define PQN normalization function
+pqn_normalization <- function(sample, ref_spectrum) {
+  quotients <- sample / ref_spectrum  # Calculate quotients
+  median_quotient <- median(quotients, na.rm = TRUE)  # Median scaling factor
+  normalized_sample <- sample / median_quotient  # Apply normalization
+  return(normalized_sample)
+}
+
+# Apply PQN normalization to all non-label columns
+normalized_features <- t(apply(data[, -1, with = FALSE], 1, pqn_normalization, ref_spectrum = mean_qc_spectrum))
+
+# Add back sample labels
+normalized_data <- cbind(Sample = data[[1]], normalized_features)
+
+# Save normalized data
+fwrite(normalized_data, output_path, row.names = FALSE)
+
+cat("Pooled PQN normalization using QC mean completed and saved to:", output_path)
+
