@@ -55,3 +55,4 @@ fwrite(normalized_data, output_path, row.names = FALSE)
 
 cat("PQN normalization completed and saved to:", output_path)
 
+# Reference https://rdrr.io/bioc/pmp/src/R/normalisation.R
