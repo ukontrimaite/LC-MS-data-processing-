@@ -1,0 +1,123 @@
+# Load necessary libraries
+library(randomForest)
+library(caret)
+library(ggplot2)
+library(pROC)
+
+# -------------------------------
+# 1️⃣ Load and Prepare Dataset
+# -------------------------------
+df <- read.csv("/Users/unek/Desktop/normalized_pqn.csv")
+
+# Ensure 'Class' is a factor
+df$Class <- as.factor(df$Class)
+
+# Check class distribution (important for debugging)
+cat("Class Distribution:\n")
+print(table(df$Class))
+
+# Remove non-numeric columns except 'Class'
+df_numeric <- df[, sapply(df, is.numeric)]
+df_numeric$Class <- df$Class  # Add Class back if removed
+
+# -------------------------------
+# 2️⃣ Split Data into Training & Testing
+# -------------------------------
+set.seed(123)  # Ensures reproducibility
+trainIndex <- createDataPartition(df$Class, p = 0.8, list = FALSE)
+
+trainData <- df[trainIndex, ]
+testData <- df[-trainIndex, ]
+
+# Extract Features (X) and Labels (Y)
+X_train <- trainData[, -which(names(trainData) == "Class")]
+Y_train <- trainData$Class
+X_test <- testData[, -which(names(testData) == "Class")]
+Y_test <- testData$Class
+
+# Confirm dataset split
+cat("\nDataset Split:\n")
+cat("Training Samples:", nrow(trainData), "\n")
+cat("Testing Samples:", nrow(testData), "\n")
+
+# -------------------------------
+# 3️⃣ Train Random Forest Model
+# -------------------------------
+set.seed(123)
+rf_model <- randomForest(X_train, Y_train, ntree = 500, importance = TRUE)
+
+# Print model summary
+print(rf_model)
+
+# Compute Out-of-Bag (OOB) Error Rate
+oob_error <- rf_model$err.rate[nrow(rf_model$err.rate), 1]
+cat("\nOOB Error Rate:", round(oob_error, 3), "\n")
+
+# -------------------------------
+# 4️⃣ Predict and Evaluate Model
+# -------------------------------
+# Predict on Test Data
+Y_pred_test <- predict(rf_model, X_test)
+
+# Compute Confusion Matrix for Test Data
+conf_matrix_test <- confusionMatrix(Y_pred_test, Y_test)
+cat("\nConfusion Matrix (Test Data):\n")
+print(conf_matrix_test)
+
+# Predict on Training Data
+Y_pred_train <- predict(rf_model, X_train)
+
+# Compute Confusion Matrix for Training Data (Optional)
+conf_matrix_train <- confusionMatrix(Y_pred_train, Y_train)
+cat("\nConfusion Matrix (Training Data):\n")
+print(conf_matrix_train)
+
+# -------------------------------
+# 5️⃣ Plot Confusion Matrix (Test Data)
+# -------------------------------
+confusion_data <- as.data.frame(conf_matrix_test$table)
+colnames(confusion_data) <- c("Reference", "Prediction", "Freq")
+
+ggplot(confusion_data, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Freq), color = "white", size = 8) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix (Test Data)", x = "Actual Class", y = "Predicted Class") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 12),
+    plot.title = element_text(size = 16, face = "bold")
+  )
+
+# -------------------------------
+# 6️⃣ Extract and Save Feature Importance
+# -------------------------------
+importance_df <- as.data.frame(importance(rf_model))
+importance_df$Feature <- rownames(importance_df)  # Add feature names
+
+# Save Feature Importance as CSV
+write.csv(importance_df, "/Users/unek/Desktop/random_forest_feature_importance.csv", row.names = FALSE)
+
+# -------------------------------
+# 7️⃣ Plot Feature Importance (Mean Decrease Accuracy)
+# -------------------------------
+top_features <- importance_df[order(-importance_df$MeanDecreaseAccuracy), ][1:20, ]
+
+ggplot(top_features, aes(x = reorder(Feature, MeanDecreaseAccuracy), y = MeanDecreaseAccuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Important Features (Mean Decrease Accuracy)", x = "Features", y = "Importance Score") +
+  theme_minimal()
+
+# -------------------------------
+# 8️⃣ Plot Feature Importance (Mean Decrease Gini Index)
+# -------------------------------
+top_gini_features <- importance_df[order(-importance_df$MeanDecreaseGini), ][1:20, ]
+
+ggplot(top_gini_features, aes(x = reorder(Feature, MeanDecreaseGini), y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "darkred") +
+  coord_flip() +
+  labs(title = "Top 20 Important Features (Mean Decrease Gini)", x = "Features", y = "Importance Score") +
+  theme_minimal()
+
