@@ -1,0 +1,70 @@
+# Load necessary libraries
+library(pls)
+library(caret)
+library(ggplot2)
+library(vip)
+
+# Load dataset
+df <- read.csv("/Users/unek/Desktop/normalized_pqn.csv")
+df$Class <- as.factor(df$Class)  # Ensure Class is a factor
+
+# Split into training (80%) and test (20%)
+set.seed(123)
+trainIndex <- createDataPartition(df$Class, p = 0.8, list = FALSE)
+trainData <- df[trainIndex, ]
+testData <- df[-trainIndex, ]
+
+# Extract features (X) and labels (Y)
+X_train <- as.matrix(trainData[, -1])  # Remove 'Class' column
+Y_train <- trainData$Class
+X_test <- as.matrix(testData[, -1])
+Y_test <- testData$Class
+
+# Standardize features
+X_train <- scale(X_train)
+X_test <- scale(X_test)
+
+# Train the PLS-DA Model with Cross-Validation (for Q²)
+set.seed(123)
+pls_model <- plsda(X_train, Y_train, ncomp = 3, validation = "LOO", method = "oscorespls")
+
+# Predict on test data
+Y_pred <- predict(pls_model, X_test, type = "class")
+
+# Compute Confusion Matrix for Performance
+conf_matrix <- confusionMatrix(Y_pred, Y_test)
+print(conf_matrix)
+
+# Compute R² (Training set)
+R2_train <- R2(pls_model)$val[1]  # Extracts the first R² value
+cat("R² for Training Set:", round(R2_train, 3), "\n")  # Prints rounded R²
+
+# Compute RMSEP (Root Mean Square Error of Prediction)
+RMSEP_train <- RMSEP(pls_model)$val[1]  # Extracts the first RMSEP value
+cat("RMSEP for Training Set:", round(RMSEP_train, 3), "\n")  # Prints rounded RMSEP
+
+# Compute Q² (Cross-validated R²)
+Q2 <- R2(pls_model, estimate = "CV")$val[1]  # Extracts the first Q² value
+cat("Q² (Cross-validated R²):", round(Q2, 3), "\n")  # Prints rounded Q²
+
+# Visualize Score Plot
+scores <- as.data.frame(pls_model$scores)
+scores$Class <- Y_train
+
+summary(pls_model)
+
+# Extract scores from the PLS-DA model
+scores <- as.data.frame(pls_model$scores)
+
+# Check the column names
+print(colnames(scores))
+
+ggplot(scores, aes(x = Comp.1, y = Comp.2, color = Class)) +
+  geom_point(size = 3) +
+  labs(title = "PLS-DA Score Plot", x = "PLS Component 1", y = "PLS Component 2") +
+  theme_minimal()
+
+# Plot VIP Scores (Variable Importance)
+vip_scores <- vip(pls_model)
+plot(vip_scores, main = "Variable Importance (VIP Scores)")
+
