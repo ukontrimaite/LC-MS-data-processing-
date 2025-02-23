@@ -1,70 +1,256 @@
-# Load necessary libraries
-library(pls)
-library(caret)
-library(ggplot2)
-library(vip)
+# ================================================
+#        PLS-DA & SVM ANALYSIS SCRIPT
+# ================================================
+
+# -------- PART 1: Load Required Libraries --------
+required_packages <- c("caret", "pls", "e1071", "ggplot2", "pROC", 
+                       "randomForest", "vip", "permute", "plsVarSel")
+
+install_if_missing <- function(pkg) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Install and load necessary packages
+sapply(required_packages, install_if_missing)
+
+# -------- PART 2: Load and Preprocess Data --------
+# Set the path to your CSV file
+data_path <- "/Users/unek/Desktop/gin8_combined_imputed_original.csv"
 
 # Load dataset
-df <- read.csv("/Users/unek/Desktop/normalized_pqn.csv")
-df$Class <- as.factor(df$Class)  # Ensure Class is a factor
+df <- read.csv(data_path, header = TRUE, stringsAsFactors = FALSE)
 
-# Split into training (80%) and test (20%)
-set.seed(123)
-trainIndex <- createDataPartition(df$Class, p = 0.8, list = FALSE)
-trainData <- df[trainIndex, ]
-testData <- df[-trainIndex, ]
+# Ensure Class is a factor
+df$Class <- as.factor(df$Class)
 
 # Extract features (X) and labels (Y)
-X_train <- as.matrix(trainData[, -1])  # Remove 'Class' column
-Y_train <- trainData$Class
-X_test <- as.matrix(testData[, -1])
-Y_test <- testData$Class
+X <- as.matrix(df[, -1])  # Exclude Class column
+Y <- df$Class
 
-# Standardize features
-X_train <- scale(X_train)
-X_test <- scale(X_test)
+# Handle missing and infinite values
+X[is.na(X)] <- 0   # Replace NA with 0
+X[is.infinite(X)] <- 0   # Replace Inf with 0
 
-# Train the PLS-DA Model with Cross-Validation (for Q²)
-set.seed(123)
-pls_model <- plsda(X_train, Y_train, ncomp = 3, validation = "LOO", method = "oscorespls")
+# Remove zero-variance columns
+zero_var_cols <- apply(X, 2, function(col) var(col, na.rm = TRUE) == 0)
+X <- X[, !zero_var_cols]
 
-# Predict on test data
-Y_pred <- predict(pls_model, X_test, type = "class")
+# Standardize features (center & scale)
+X <- scale(X, center = TRUE, scale = TRUE)
 
-# Compute Confusion Matrix for Performance
-conf_matrix <- confusionMatrix(Y_pred, Y_test)
-print(conf_matrix)
+# Print dataset summary
+cat("Data Summary:\n")
+cat("Number of Samples:", nrow(X), "\n")
+cat("Number of Features:", ncol(X), "\n")
+cat("Class Distribution:\n")
+print(table(Y))
 
-# Compute R² (Training set)
-R2_train <- R2(pls_model)$val[1]  # Extracts the first R² value
-cat("R² for Training Set:", round(R2_train, 3), "\n")  # Prints rounded R²
+# -------- PART 3: Split Data into Training & Test Sets --------
+set.seed(123)  # For reproducibility
+trainIndex <- createDataPartition(Y, p = 0.8, list = FALSE)
+X_train <- X[trainIndex, ]
+Y_train <- Y[trainIndex]
+X_test <- X[-trainIndex, ]
+Y_test <- Y[-trainIndex]
 
-# Compute RMSEP (Root Mean Square Error of Prediction)
-RMSEP_train <- RMSEP(pls_model)$val[1]  # Extracts the first RMSEP value
-cat("RMSEP for Training Set:", round(RMSEP_train, 3), "\n")  # Prints rounded RMSEP
+cat("\nDataset Split:\n")
+cat("Training Samples:", nrow(X_train), "\n")
+cat("Testing Samples:", nrow(X_test), "\n")
 
-# Compute Q² (Cross-validated R²)
-Q2 <- R2(pls_model, estimate = "CV")$val[1]  # Extracts the first Q² value
-cat("Q² (Cross-validated R²):", round(Q2, 3), "\n")  # Prints rounded Q²
+# -------- PART 4: Train PLS-DA Model --------
+# Convert factor response to a numeric matrix (One-hot encoding)
+Y_train_numeric <- model.matrix(~ Y_train - 1)
 
-# Visualize Score Plot
-scores <- as.data.frame(pls_model$scores)
-scores$Class <- Y_train
+# Train PLS-DA model
+pls_model <- plsr(Y_train_numeric ~ X_train, 
+                  ncomp = min(5, ncol(X_train)), 
+                  validation = "LOO", 
+                  method = "oscorespls")
 
+# Summary of the model
 summary(pls_model)
 
-# Extract scores from the PLS-DA model
-scores <- as.data.frame(pls_model$scores)
+# -------- PART 5: Cross-Validation & Q² Calculation --------
+cv_rmsep <- RMSEP(pls_model, estimate = "CV")
+Q2_values <- R2(pls_model, estimate = "CV")$val  # Extract Q² values
+print(Q2_values)  # Shows Q² for each component
 
-# Check the column names
-print(colnames(scores))
+# -------- PART 6: Predictions & Confusion Matrix --------
+# Ensure best_ncomp does not exceed available components
 
-ggplot(scores, aes(x = Comp.1, y = Comp.2, color = Class)) +
-  geom_point(size = 3) +
-  labs(title = "PLS-DA Score Plot", x = "PLS Component 1", y = "PLS Component 2") +
+# Determine the optimal number of components using RMSEP (Root Mean Square Error of Prediction)
+cv_rmsep <- RMSEP(pls_model, estimate = "CV")
+
+# Find the component with the lowest RMSEP (ignoring the intercept component)
+best_ncomp <- which.min(cv_rmsep$val[-1])  # Exclude first component (intercept)
+
+# Ensure best_ncomp does not exceed the available components in the model
+best_ncomp <- min(best_ncomp, pls_model$ncomp)
+
+# Print the selected number of components
+cat("Optimal number of components selected:", best_ncomp, "\n")
+
+# Ensure the model exists before predicting
+if (!exists("pls_model")) {
+  stop("Error: PLS-DA model not found. Train the model before predicting.")
+}
+
+# Predict on test set using the optimal number of components
+Y_pred_pls <- predict(pls_model, newdata = X_test, ncomp = best_ncomp)
+
+# Check structure and dimensions of Y_pred_pls
+print("Structure of Y_pred_pls:")
+print(str(Y_pred_pls))
+
+print("Dimensions of Y_pred_pls:")
+print(dim(Y_pred_pls))
+
+
+best_ncomp <- min(best_ncomp, dim(Y_pred_pls)[3])
+
+# Safely extract predictions
+if (length(dim(Y_pred_pls)) == 3) {
+  if (dim(Y_pred_pls)[3] >= best_ncomp) {
+    Y_pred_selected <- Y_pred_pls[, , best_ncomp]
+  } else {
+    stop("Error: best_ncomp exceeds available components in Y_pred_pls.")
+  }
+} else {
+  Y_pred_selected <- Y_pred_pls  # Use directly if it's 2D
+}
+
+# Check dimensions
+print(dim(Y_pred_selected))
+
+# Convert numeric predictions into class labels
+if (ncol(Y_pred_selected) == 2) {
+  Y_pred_labels <- ifelse(Y_pred_selected[, 2] > Y_pred_selected[, 1], "GIN8", "GIN_8_Co8")
+  Y_pred_labels <- factor(Y_pred_labels, levels = levels(Y_test))  # Ensure levels match
+} else {
+  stop("Unexpected prediction output: Y_pred_selected should have two columns.")
+}
+
+# Compute Confusion Matrix
+conf_matrix_pls <- confusionMatrix(Y_pred_labels, Y_test)
+
+# Print Confusion Matrix
+cat("\nPLS-DA Confusion Matrix:\n")
+print(conf_matrix_pls)
+
+
+# Print Confusion Matrix
+cat("\nPLS-DA Confusion Matrix:\n")
+print(conf_matrix_pls)
+
+# -------- PART 7: Compute Variable Importance (VIP) --------
+
+library(plsVarSel)
+vip_scores <- VIP(pls_model, opt.comp = pls_model$ncomp)
+vip_df <- data.frame(Feature = colnames(X_train), VIP = vip_scores)
+vip_df <- vip_df[order(-vip_df$VIP), ]  # Sort by highest VIP scores
+
+# Save VIP scores to CSV
+write.csv(vip_df, "~/Desktop/VIP_scores.csv", row.names = FALSE)
+
+# Plot Top 20 VIP Features
+top_vip <- head(vip_df, 20)
+ggplot(top_vip, aes(x = reorder(Feature, -VIP), y = VIP)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 VIP Scores", x = "Feature", y = "VIP Score") +
   theme_minimal()
 
-# Plot VIP Scores (Variable Importance)
-vip_scores <- vip(pls_model)
-plot(vip_scores, main = "Variable Importance (VIP Scores)")
+# -------- PART 8: Permutation Test --------
 
+#Set a fixed seed for reproducibility
+set.seed(123)
+
+# nsure permuted labels have the correct length
+perm_Y_train <- sample(Y_train, size = length(Y_train), replace = FALSE)
+
+# Check if lengths match
+cat("\nChecking Dimensions After Fix:\n")
+print(dim(X_train))       # Should be (16, 809)
+print(length(Y_train))    # Should be 16
+print(length(perm_Y_train))  # Should now also be 16
+
+# Convert to matrix (PLS expects numeric input)
+perm_Y_train_numeric <- model.matrix(~ perm_Y_train - 1)
+
+# heck for NA values before model fitting
+if (any(is.na(perm_Y_train_numeric))) {
+  stop("Error: NA values found in perm_Y_train_numeric after permutation!")
+}
+
+# it PLS-DA Model with Permuted Labels
+perm_model <- plsr(perm_Y_train_numeric ~ X_train, 
+                   ncomp = min(5, ncol(X_train)), 
+                   validation = "LOO", 
+                   method = "oscorespls")
+
+# Check model structure after permutation
+print(summary(perm_model))
+
+# Get Q² values for permutation test
+perm_Q2_values <- R2(perm_model, estimate = "CV")$val
+
+# Print results
+cat("\nPermutation Test: Q² Values with Permuted Labels:\n")
+print(perm_Q2_values)
+
+# Plot Permutation Test Results
+
+# Create a data frame for plotting
+perm_data <- data.frame(Accuracy = permuted_accuracy)
+
+# Compute observed accuracy from the actual model
+observed_accuracy <- conf_matrix_pls$overall['Accuracy']
+
+# Plot histogram of permuted accuracies
+
+# Prepare data for plotting
+perm_q2_data <- data.frame(Q2 = as.numeric(perm_Q2_values))
+actual_q2 <- as.numeric(R2(pls_model, estimate = "CV")$val)  # Q² from actual model
+
+# Create Histogram of Permuted Q² Values
+perm_q2_plot <- ggplot(perm_q2_data, aes(x = Q2)) +
+  geom_histogram(binwidth = 0.05, fill = "steelblue", alpha = 0.7, color = "black") +
+  geom_vline(aes(xintercept = mean(actual_q2)), color = "red", linetype = "dashed", size = 1.5) +
+  labs(
+    title = "Permutation Test for Q² Values",
+    subtitle = "Comparison of Actual vs. Permuted Q² Values",
+    x = "Permuted Q² Values",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+# Print and save plot
+print(perm_q2_plot)
+ggsave("~/Desktop/permutation_Q2_plot.png", perm_q2_plot, width = 8, height = 6, dpi = 300)
+
+cat("\nPermutation test plot saved successfully!\n")
+
+
+# -------- PART 9: Train SVM Model --------
+set.seed(123)
+svm_model <- svm(X_train, Y_train, type = "C-classification", kernel = "linear", cost = 1)
+
+# Predict on test set
+Y_pred_svm <- predict(svm_model, X_test)
+
+# Compute confusion matrix for SVM
+conf_matrix_svm <- confusionMatrix(Y_pred_svm, Y_test)
+cat("\nSVM Confusion Matrix:\n")
+print(conf_matrix_svm)
+
+# Compute Correct Classification Rate (CCR) for SVM
+ccr_svm <- conf_matrix_svm$overall['Accuracy']
+cat("\nSVM Correct Classification Rate (CCR):", round(ccr_svm * 100, 2), "%\n")
+
+# Save SVM Confusion Matrix
+write.csv(as.data.frame(conf_matrix_svm$table), "~/Desktop/svm_confusion_matrix.csv", row.names = FALSE)
+
+cat("\nAll results saved successfully!")
