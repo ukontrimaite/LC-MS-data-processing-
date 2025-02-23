@@ -1,0 +1,86 @@
+library(dplyr)
+library(readr)
+library(tidyr)
+library(ggplot2)
+# library(multtest)  # Removed as it is not installed
+
+# Load Data
+data <- read_csv("/Users/unek/Desktop/gin8_combined_imputed_original.csv")
+
+# Define Parameters
+fold_change_threshold <- 2.0  # User-defined fold change threshold
+p_value_threshold <- 0.1  # User-defined p-value threshold
+adjustment_method <- "bonferroni"  # Options: "BH" for Benjamini-Hochberg, "bonferroni"
+
+# Assume first column is sample labels, the rest are metabolite intensities
+sample_info <- data[, 1]
+metabolite_data <- data[, -1]
+
+# Define groups
+# Assuming sample labels contain group information
+# Modify this based on your dataset's structure
+group_labels <- factor(sample_info$Class)  # Modify column name if needed
+
+# Perform a global variance test on the entire dataset
+all_group1 <- as.vector(unlist(metabolite_data[group_labels == levels(group_labels)[1], ]))
+all_group2 <- as.vector(unlist(metabolite_data[group_labels == levels(group_labels)[2], ]))
+
+global_variance_test <- var.test(all_group1, all_group2)
+global_equal_var <- global_variance_test$p.value >= 0.05  # TRUE if variances are equal
+
+# Print global variance test result
+print(paste("Global variance test p-value:", global_variance_test$p.value))
+print(paste("Using", ifelse(global_equal_var, "Student's t-test", "Welch's t-test"), "for all metabolites."))
+
+# Perform t-tests & calculate fold changes
+results <- apply(metabolite_data, 2, function(x) {
+  group1 <- x[group_labels == levels(group_labels)[1]]
+  group2 <- x[group_labels == levels(group_labels)[2]]
+  
+  # Use the globally determined t-test type
+  t_test <- t.test(group1, group2, var.equal = global_equal_var)
+  
+  fold_change <- mean(group1) / mean(group2)  # Raw fold change
+  
+  # If your data is log10-transformed, replace this line:
+  # log2FC <- (mean(group1) - mean(group2)) * log2(10)
+  log2FC <- log2(fold_change)
+  
+  c(mean_group1 = mean(group1), mean_group2 = mean(group2), fold_change, log2FC, p_value = t_test$p.value)
+})
+
+# Convert results to dataframe
+results_df <- as.data.frame(t(results))
+colnames(results_df) <- c("Mean_Group1", "Mean_Group2", "Fold_Change", "Log2_Fold_Change", "P_Value")
+
+# Apply p-value adjustment
+results_df$Adjusted_P <- p.adjust(results_df$P_Value, method = adjustment_method)
+
+# Add metadata about the statistical test and adjustment method
+results_df$Adjustment_Method <- adjustment_method
+results_df$T_Test_Used <- ifelse(global_equal_var, "Student's t-test", "Welch's t-test")
+
+# Filter significant features
+significant_features <- results_df %>%
+  filter(abs(Fold_Change) >= fold_change_threshold & Adjusted_P <= p_value_threshold)
+
+# Save results
+write_csv(results_df, "/Users/unek/Desktop/metaboanalyst_results.csv")
+write_csv(significant_features, "/Users/unek/Desktop/metaboanalyst_significant_features.csv")
+
+# Output summary
+print(paste("Total significant features: ", nrow(significant_features)))
+
+# Plot Volcano Plot
+results_df <- results_df %>%
+  mutate(Significance = ifelse(Adjusted_P < p_value_threshold & abs(Fold_Change) >= fold_change_threshold, "Significant", "Not Significant"))
+
+ggplot(results_df, aes(x = log2(Fold_Change), y = -log10(P_Value), color = Significance)) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "black")) +
+  labs(title = "Volcano Plot", x = "Log2 Fold Change", y = "-Log10 P-Value")
+
+# Save the plot
+ggsave("/Users/unek/Desktop/volcano_plot.png")
+
