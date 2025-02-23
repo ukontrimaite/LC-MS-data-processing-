@@ -121,10 +121,4 @@ ggplot(top_gini_features, aes(x = reorder(Feature, MeanDecreaseGini), y = MeanDe
   labs(title = "Top 20 Important Features (Mean Decrease Gini)", x = "Features", y = "Importance Score") +
   theme_minimal()
 
-# Additional plot to visualise what class spepcific feature is important 
-ggplot(df, aes(x = Class, y = X3, fill = Class)) +
-  geom_boxplot() +
-  theme_minimal() +
-  labs(title = "Distribution of Feature X3 Across Classes",
-       x = "Class",
-       y = "X3 Intensity")
+
